@@ -207,28 +207,24 @@ async def process_one(
                  print(f"[Fail] {round_str}. Smolagent not initialized.")
                  break
             try:
-                # For the first turn, combine rule and board prompts, and reset history
-                if round_idx == 0:
-                    # Use rule_prompt + PREFILLED_ASSISTANT_RESPONSE + current_board_prompt as the first user message
-                    # Note: smol-agent's run expects a single string. We format it simply.
-                    initial_user_message = f"User: {rule_prompt}\n\nAssistant: {PREFILLED_ASSISTANT_RESPONSE}\n\nUser: {board_prompt}"
-                    # We need to run agent in a separate thread or use async version if available
-                    # For now, using sync version, assuming it's okay for asyncio context (might block)
-                    # TODO: Check smolagents documentation for async run or use asyncio.to_thread
-                    # The initial 'history_conversation' is not directly used by agent.run's state
-                    # We need to manually manage the state via reset=True/False
-                    result = await asyncio.to_thread(
-                        agent.run,
-                        initial_user_message,
-                        reset=True # Reset agent's internal memory
-                    )
-                # For subsequent turns, use only the current board prompt and don't reset
-                else:
-                    result = await asyncio.to_thread(
-                        agent.run,
-                        board_prompt,
-                        reset=False # Maintain agent's internal memory
-                    )
+                # Format the input conversation history into a single string prompt
+                # TODO: Consider a more robust formatting function if needed
+                prompt_string = ""
+                for i, msg in enumerate(input_conversation):
+                    role = msg["role"].capitalize()
+                    content = msg["content"]
+                    # Simple formatting, add newlines between turns
+                    if i > 0:
+                        prompt_string += "\n\n"
+                    prompt_string += f"{role}: {content}"
+
+                # Call agent.run with the full formatted history and reset=True
+                result = await asyncio.to_thread(
+                    agent.run,
+                    prompt_string,
+                    reset=True # Treat each call as stateless from the agent's perspective
+                )
+
                 assistant_response = smolagents_output_to_string(result)
             except Exception as e:
                 # TODO: Implement retry logic similar to the original call_api if needed
@@ -434,8 +430,8 @@ def main():
                         help="Shuffle seeds for the random hint fill. Only used if num_empty_cells > 0.")
     parser.add_argument("--n_response_idxs", type=int, nargs="+", default=[0],
                         help="If you want to run multiple trials per puzzle/hint/seed. E.g., [0,1,2,3,4] for 5 runs.")
-    parser.add_argument("--n_history_turns", type=int, nargs="+", default=[-1],
-                        help="Number of history turns to include in each LLM prompt. -1 means full history. (Currently unused by smolagents)")
+    parser.add_argument("--n_history_turns", type=int, nargs="+", default=[5],
+                        help="Number of history turns to include in each LLM prompt. -1 means full history.")
 
     # Model
     parser.add_argument("--agent_framework", type=str, default="smolagents",
@@ -469,14 +465,6 @@ def main():
                         help="Use the draft model.")
     
     args = parser.parse_args()
-
-    # Add check for n_history_turns when using smolagents
-    if args.agent_framework == "smolagents":
-        if any(n != -1 for n in args.n_history_turns):
-            raise ValueError(
-                "--n_history_turns must be [-1] when using agent_framework='smolagents'. "
-                "smolagents manages its own history." 
-            )
 
     # Sanity check
     assert args.num_empty_cells != [0] or len(args.shuffle_seeds) == 1, \
@@ -529,20 +517,6 @@ def main():
                         if request is not None:
                             requests.append(request)
     print(f"Number of requests to process: {len(requests)}")
-
-    # Setup client - Only initialize if not using smolagents directly in process_one
-    # client and tokenizer are not needed at this level if handled within process_one per agent type
-    # client = None
-    # tokenizer = None
-    # if args.api == "openai":
-    #     client = openai.AsyncOpenAI(...)
-    # elif args.api == "anthropic":
-    #     client = anthropic.AsyncAnthropic(...)
-    # ... other initializations ...
-    # elif args.api == "vllm":
-    #     client = AsyncLLMEngine.from_engine_args(...)
-    #     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    # Note: smolagents agent is initialized within process_one
 
     # Process batch
     all_results = asyncio.run(process_batch(

@@ -34,7 +34,7 @@ This directory provides two primary scripts for evaluation:
 export OPENAI_API_KEY="your_openai_api_key"
 export DATASET="challenge_100"
 export API="openai"
-export MODEL="gpt-4o-mini-2024-07-18"
+export MODEL="gpt-4.1-2025-04-14"
 
 # Run evaluation
 python -m eval.run \
@@ -42,7 +42,10 @@ python -m eval.run \
     --output_csv ../data/benchmark_results/${DATASET}/${MODEL}.csv \
     --api openai \
     --model ${MODEL} \
-    --batch_size 20
+    --num_empty_cells 0 5 10 \
+    --n_response_idxs 0 1 2 3 4 \
+    --puzzle_size 4 \
+    --batch_size 15
 ```
 
 ### Basic Usage (`run_agent.py` - Agent Framework)
@@ -54,7 +57,7 @@ This script uses Agent Frameworks. Currently, `smolagents` is supported.
 export OPENAI_API_KEY="your_openai_api_key" # Or other keys if using different models via litellm
 export DATASET="challenge_100"
 export AGENT_FRAMEWORK="smolagents"
-export MODEL_ID="openai/gpt-4o-mini" # Model ID supported by the framework (e.g., litellm)
+export MODEL_ID="openai/gpt-4.1-2025-04-14" # Model ID supported by the framework (e.g., litellm)
 
 # Run evaluation using smolagents
 python -m eval.run_agent \
@@ -63,8 +66,9 @@ python -m eval.run_agent \
     --agent_framework ${AGENT_FRAMEWORK} \
     --model ${MODEL_ID} \
     --num_empty_cells 0 5 10 \
+    --n_response_idxs 0 1 2 3 4 \
     --puzzle_size 4 \
-    --batch_size 5 # Adjust as needed
+    --batch_size 15
 ```
 
 ### Command-Line Arguments
