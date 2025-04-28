@@ -22,7 +22,12 @@ The evaluation process works as follows:
 
 ## Usage
 
-### Basic Usage
+This directory provides two primary scripts for evaluation:
+
+1.  `run.py`: Evaluates LLMs using direct API calls (OpenAI, Anthropic, etc.).
+2.  `run_agent.py`: Evaluates LLMs using Agent Frameworks like `smolagents`.
+
+### Basic Usage (`run.py` - Direct API)
 
 ```bash
 # Set required environment variables
@@ -35,12 +40,33 @@ export MODEL="gpt-4o-mini-2024-07-18"
 python -m eval.run \
     --dataset ${DATASET} \
     --output_csv ../data/benchmark_results/${DATASET}/${MODEL}.csv \
-    --api ${API} \
+    --api openai \
     --model ${MODEL} \
     --batch_size 20
 ```
 
+### Basic Usage (`run_agent.py` - Agent Framework)
+
+This script uses Agent Frameworks. Currently, `smolagents` is supported.
+
+```bash
+# Set environment variables potentially used by the framework/model (e.g., litellm)
+export OPENAI_API_KEY="your_openai_api_key" # Or other keys if using different models via litellm
+export DATASET="challenge_100"
+export MODEL_ID="openai/gpt-4o-mini" # Model ID supported by the framework (e.g., litellm)
+
+# Run evaluation using smolagents
+python -m eval.run_agent \
+    --dataset ${DATASET} \
+    --output_csv ../data/benchmark_results/${DATASET}/${MODEL_ID//\//-}_smolagents.csv \
+    --agent_framework smolagents \
+    --model ${MODEL_ID} \
+    --batch_size 5 # Adjust as needed
+```
+
 ### Command-Line Arguments
+
+Most arguments are shared between `run.py` and `run_agent.py`.
 
 #### Dataset Selection
 - `--dataset`: Dataset to evaluate on. Choices: `"challenge_100"`, `"nikoli_100"`, `"ctc"`. Required.
@@ -64,18 +90,16 @@ python -m eval.run \
 - `--api`: API provider to use. Choices: `"openai"`, `"anthropic"`, `"anthropic_bedrock"`, `"deepseek"`, `"vllm"`, `"togetherai"`. Default: `"openai"`.
 - `--model`: Model name or path. Required.
 - `--model_save_name`: Model name in the saved results. If not provided, uses `--model`.
-- `--max_tokens`: Maximum tokens in each LLM response (default: 8192)
-- `--temperature`: Sampling temperature (default: 0.1)
-- `--top_p`: Top-p sampling probability (default: 0.95)
-- `--top_k`: Top-k sampling (default: 40)
-- `--batch_size`: Batch size for parallel processing (default: 16)
-- `--max_retries`: Maximum number of retries for API calls (default: 3)
-- `--retry_delay`: Delay between retries in seconds (default: 5.0)
+- `--max_tokens`: Maximum *new* tokens in each LLM response (default: 8192). Note: Behavior might vary slightly between direct APIs and frameworks.
+- `--temperature`: Sampling temperature (default: 0.1).
+- `--top_p`: Top-p sampling probability (default: 0.95).
+- `--top_k`: Top-k sampling (default: 40). (Note: May not be directly supported by all frameworks/models, e.g., `LiteLLMModel`).
+- `--batch_size`: Batch size for parallel processing (default: 16 for `run.py`, adjust as needed, e.g., lower for `run_agent.py`).
+- `--max_retries`: Maximum number of retries for API calls (default: 3). (Note: Retry logic might differ or be absent in agent frameworks).
+- `--retry_delay`: Delay between retries in seconds (default: 5.0).
 
-#### vLLM-Specific Parameters
+#### vLLM-Specific Parameters (for `run.py` with `--api vllm`)
 - `--tensor_parallel_size`: Tensor parallel size for vLLM (default: 1)
-- `--pipeline_parallel_size`: Pipeline parallel size for vLLM (default: 1)
-- `--draft_model`: Optional draft model path for speculative decoding
 
 ### Environment Variables
 
