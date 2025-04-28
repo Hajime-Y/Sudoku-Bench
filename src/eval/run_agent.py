@@ -51,22 +51,30 @@ import sys
 from typing import Any, Dict, List, Optional, Union
 import uuid
 
-import aiohttp
-import anthropic
+# import aiohttp
+# import anthropic
 import datasets
 import jinja2
-import openai
+# import openai
 import pandas as pd
 from tqdm import tqdm
-from transformers import AutoTokenizer
+# from transformers import AutoTokenizer
+# try:
+#     from vllm import AsyncLLMEngine, SamplingParams
+#     from vllm.engine.arg_utils import AsyncEngineArgs
+# except ImportError:
+#     print("vllm not installed. Please install vllm to use it.")
+#     AsyncLLMEngine = None
+#     SamplingParams = None
+#     AsyncEngineArgs = None
+
+# Add smolagents imports
 try:
-    from vllm import AsyncLLMEngine, SamplingParams
-    from vllm.engine.arg_utils import AsyncEngineArgs
+    from smolagents import CodeAgent, LiteLLMModel
 except ImportError:
-    print("vllm not installed. Please install vllm to use it.")
-    AsyncLLMEngine = None
-    SamplingParams = None
-    AsyncEngineArgs = None
+    print("smolagents not installed. Please run `uv add smolagents litellm`")
+    CodeAgent = None
+    LiteLLMModel = None
 
 from eval.prompts import (
     BOARD_PROMPT,
@@ -77,6 +85,7 @@ from eval.utils import (
     extract_action_from_response,
     pretty_print_visual_elements,
     random_fill_hints,
+    smolagents_output_to_string,
 )
 from sudoku_ds import (
     SudokuAction,
@@ -84,99 +93,10 @@ from sudoku_ds import (
 )
 
 
-async def call_api(
-    args: argparse.Namespace,
-    client: Union[Any],
-    messages: List[Dict],
-    model: str,
-    tokenizer: Optional[AutoTokenizer] = None,
-) -> Optional[str]:
-    attempt = 0
-    while attempt < args.max_retries:
-        try:
-            # OpenAI API
-            if isinstance(client, openai.AsyncOpenAI):
-                kwargs = {
-                    "model": model,
-                    "messages": messages,
-                    "temperature": args.temperature,
-                    "top_p": args.top_p,
-                }
-                # Special setting for o1, o3
-                if "o1-" in model or "o3-" in model:
-                    kwargs["max_completion_tokens"] = args.max_tokens
-                    kwargs["temperature"] = 1.0
-                # Special setting for R1 (TogetherAI)
-                if model == "deepseek-ai/DeepSeek-R1":
-                    kwargs["temperature"] = 0.6
-                    kwargs["max_tokens"] = None
-                else:
-                    kwargs["max_tokens"] = min(args.max_tokens, 8192)
-                completion = await client.chat.completions.create(**kwargs)
-                output_text = completion.choices[0].message.content
-            # Anthropic API
-            elif isinstance(client, (anthropic.AsyncAnthropic, anthropic.AsyncAnthropicBedrock)):
-                kwargs = {
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": args.max_tokens,
-                    "temperature": args.temperature,
-                    "top_p": args.top_p,
-                    "top_k": args.top_k,
-                }
-                # Special setting for reasoning models as suggested
-                if model.endswith("/thinking"):
-                    kwargs["model"] = model.replace("/thinking", "")
-                    kwargs["temperature"] = 1.0
-                    kwargs["thinking"] = {
-                        "type": "enabled",
-                        "budget_tokens": args.max_tokens - 1024,
-                    }
-                # Handle system prompts for Anthropic APIs
-                if messages[0]["role"] == "system":
-                    kwargs["system"] = messages[0]["content"]
-                    kwargs["messages"] = messages[1:]
-                completion = await client.messages.create(**kwargs)
-                output_text = completion.content[-1].text
-            # vLLM API
-            elif isinstance(client, AsyncLLMEngine):
-                prompt = tokenizer.apply_chat_template(
-                    conversation=messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                result_generator = client.generate(
-                    prompt,
-                    SamplingParams(
-                        temperature=args.temperature,
-                        top_p=args.top_p,
-                        top_k=args.top_k,
-                        max_tokens=args.max_tokens,
-                    ),
-                    uuid.uuid4(),
-                )
-                final_output = None
-                async for request_output in result_generator:
-                    final_output = request_output
-                prompt = final_output.prompt
-                output_text = [output.text for output in final_output.outputs][0]
-            return output_text
-            
-        except Exception as e:
-            attempt += 1
-            if attempt == args.max_retries:
-                print(f"Failed after {args.max_retries} attempts for request. {e}")
-                return None
-            # Add small delay between retries
-            await asyncio.sleep(args.retry_delay)
-
-
 async def process_one(
     args: argparse.Namespace,
-    client: Union[Any],
     request: Dict,
     model: str,
-    tokenizer: Optional[AutoTokenizer] = None
 ) -> Dict:
     # Load data
     rules = request["rules"]
@@ -227,7 +147,27 @@ async def process_one(
         {"role": "assistant", "content": PREFILLED_ASSISTANT_RESPONSE}
     ]
 
+    # Initialize smolagents CodeAgent if api is smolagents
+    agent = None
+    if args.agent_framework == "smolagents":
+        if CodeAgent is None or LiteLLMModel is None:
+            raise ImportError("smolagents is not installed. Please run `pip install -r requirements.txt`")
+        # Use args.model as model_id for LiteLLMModel
+        llm_model = LiteLLMModel(
+            model_id=model,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_tokens=args.max_tokens,
+            # top_k is not directly supported by LiteLLMModel, configure via model params if needed
+        )
+        agent = CodeAgent(
+            tools=[], # No tools needed for Sudoku
+            model=llm_model,
+        )
+        
+
     num_correct_placements = 0
+    assistant_response = None # Initialize assistant_response
     for round_idx in range(max_rounds):
         round_str = f"Round {round_idx + 1} / {max_rounds}"
 
@@ -261,14 +201,55 @@ async def process_one(
                     + history_conversation[-1:]
             ]
 
-        # Call API
-        assistant_response = await call_api(
-            args=args,
-            client=client,
-            model=model,
-            tokenizer=tokenizer,
-            messages=input_conversation,
-        )
+        # Call agent
+        if args.agent_framework == "smolagents":
+            if agent is None:
+                 print(f"[Fail] {round_str}. Smolagent not initialized.")
+                 break
+            try:
+                # For the first turn, combine rule and board prompts, and reset history
+                if round_idx == 0:
+                    # Use rule_prompt + PREFILLED_ASSISTANT_RESPONSE + current_board_prompt as the first user message
+                    # Note: smol-agent's run expects a single string. We format it simply.
+                    initial_user_message = f"User: {rule_prompt}\n\nAssistant: {PREFILLED_ASSISTANT_RESPONSE}\n\nUser: {board_prompt}"
+                    # We need to run agent in a separate thread or use async version if available
+                    # For now, using sync version, assuming it's okay for asyncio context (might block)
+                    # TODO: Check smolagents documentation for async run or use asyncio.to_thread
+                    # The initial 'history_conversation' is not directly used by agent.run's state
+                    # We need to manually manage the state via reset=True/False
+                    result = await asyncio.to_thread(
+                        agent.run,
+                        initial_user_message,
+                        reset=True # Reset agent's internal memory
+                    )
+                # For subsequent turns, use only the current board prompt and don't reset
+                else:
+                    result = await asyncio.to_thread(
+                        agent.run,
+                        board_prompt,
+                        reset=False # Maintain agent's internal memory
+                    )
+                assistant_response = smolagents_output_to_string(result)
+            except Exception as e:
+                # TODO: Implement retry logic similar to the original call_api if needed
+                print(f"[Fail] {round_str}. Error calling smolagent: {e}")
+                # Use the previous response if available, otherwise break
+                if assistant_response is None:
+                    break
+                # If there was a previous response, try to reuse it or handle error
+                print(f"Using previous response due to error.")
+
+        # --- Placeholder for other API/Agent Frameworks ---
+        # elif args.api == "openai":
+        #     # Original call_api logic or a refactored version for OpenAI
+        #     pass # Replace with actual call
+        # elif args.api == "anthropic":
+        #     # Original call_api logic or a refactored version for Anthropic
+        #     pass # Replace with actual call
+        # ... etc.
+        else:
+             print(f"[Fail] {round_str}. Unsupported Agent Framework: {args.agent_framework}")
+             break
 
         # Teriminate if no response
         if not assistant_response:
@@ -360,9 +341,7 @@ async def process_one(
 async def process_batch(
     args: argparse.Namespace,
     requests: List[Dict],
-    client: Union[Any],
     model: str,
-    tokenizer: Optional[AutoTokenizer] = None,
     batch_size: int = 1
 ) -> List[Dict]:
     semaphore = asyncio.Semaphore(batch_size)
@@ -370,10 +349,8 @@ async def process_batch(
         async with semaphore:
             return await process_one(
                 args=args,
-                client=client,
                 request=request,
                 model=model,
-                tokenizer=tokenizer,
             )
     
     tasks = [process_with_semaphore(request) for request in requests]
@@ -458,12 +435,12 @@ def main():
     parser.add_argument("--n_response_idxs", type=int, nargs="+", default=[0],
                         help="If you want to run multiple trials per puzzle/hint/seed. E.g., [0,1,2,3,4] for 5 runs.")
     parser.add_argument("--n_history_turns", type=int, nargs="+", default=[5],
-                        help="Number of history turns to include in each LLM prompt. -1 means full history.")
+                        help="Number of history turns to include in each LLM prompt. -1 means full history. (Currently unused by smolagents)")
 
     # Model
-    parser.add_argument("--api", type=str, default="openai",
-                        choices=["openai", "anthropic", "anthropic_bedrock", "deepseek", "vllm", "togetherai"],
-                        help="API to use.")
+    parser.add_argument("--agent_framework", type=str, default="smolagents",
+                        choices=["smolagents"],
+                        help="Agent Framework or direct API to use for evaluation.")
     parser.add_argument("--model", type=str, required=True,
                         help="Model name or path.")
     parser.add_argument("--model_save_name", type=str,
@@ -492,6 +469,14 @@ def main():
                         help="Use the draft model.")
     
     args = parser.parse_args()
+
+    # Add check for n_history_turns when using smolagents
+    if args.agent_framework == "smolagents":
+        if any(n != -1 for n in args.n_history_turns):
+            raise ValueError(
+                "--n_history_turns must be [-1] when using agent_framework='smolagents'. "
+                "smolagents manages its own history." 
+            )
 
     # Sanity check
     assert args.num_empty_cells != [0] or len(args.shuffle_seeds) == 1, \
@@ -545,56 +530,11 @@ def main():
                             requests.append(request)
     print(f"Number of requests to process: {len(requests)}")
 
-    # Setup client
-    tokenizer = None
-    if args.api == "openai":
-        client = openai.AsyncOpenAI(
-            api_key=os.environ.get("OPENAI_API_KEY"),
-        )
-    elif args.api == "anthropic":
-        client = anthropic.AsyncAnthropic(
-            api_key=os.environ.get("ANTHROPIC_API_KEY"),
-        )
-    elif args.api == "anthropic_bedrock":
-        client = anthropic.AsyncAnthropicBedrock(
-            aws_access_key=os.getenv("AWS_ACCESS_KEY"),
-            aws_secret_key=os.getenv("AWS_SECRET_KEY"),
-            aws_region=os.getenv("AWS_REGION"),
-        )
-    elif args.api == "deepseek":
-        client = openai.AsyncOpenAI(
-            api_key=os.environ.get("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com",
-        )
-    elif args.api == "togetherai":
-        client = openai.AsyncOpenAI(
-            api_key=os.environ.get("TOGETHERAI_API_KEY"),
-            base_url="https://api.together.xyz/v1",
-        )
-    elif args.api == "vllm":
-        client = AsyncLLMEngine.from_engine_args(
-            AsyncEngineArgs(
-                model=args.model,
-                gpu_memory_utilization=0.9,
-                tensor_parallel_size=args.tensor_parallel_size,
-                pipeline_parallel_size=args.pipeline_parallel_size,
-                enable_chunked_prefill=False if args.draft_model else True,
-                max_num_batched_tokens=None if args.draft_model else 8192,
-                enable_prefix_caching=False if "gemma" in args.model else True,
-                enforce_eager=True,
-                speculative_model=args.draft_model,
-                num_speculative_tokens=5 if args.draft_model else None,
-            )
-        )
-        tokenizer = AutoTokenizer.from_pretrained(args.model)
-        
     # Process batch
     all_results = asyncio.run(process_batch(
         args=args,
         batch_size=args.batch_size,
         requests=requests,
-        client=client,
-        tokenizer=tokenizer,
         model=args.model
     ))
 

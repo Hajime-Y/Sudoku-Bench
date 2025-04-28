@@ -22,25 +22,58 @@ The evaluation process works as follows:
 
 ## Usage
 
-### Basic Usage
+This directory provides two primary scripts for evaluation:
+
+1.  `run.py`: Evaluates LLMs using direct API calls (OpenAI, Anthropic, etc.).
+2.  `run_agent.py`: Evaluates LLMs using Agent Frameworks like `smolagents`.
+
+### Basic Usage (`run.py` - Direct API)
 
 ```bash
 # Set required environment variables
 export OPENAI_API_KEY="your_openai_api_key"
 export DATASET="challenge_100"
 export API="openai"
-export MODEL="gpt-4o-mini-2024-07-18"
+export MODEL="gpt-4.1-2025-04-14"
 
 # Run evaluation
 python -m eval.run \
     --dataset ${DATASET} \
     --output_csv ../data/benchmark_results/${DATASET}/${MODEL}.csv \
-    --api ${API} \
+    --api openai \
     --model ${MODEL} \
-    --batch_size 20
+    --num_empty_cells 0 5 10 \
+    --n_response_idxs 0 1 2 3 4 \
+    --puzzle_size 4 \
+    --batch_size 15
+```
+
+### Basic Usage (`run_agent.py` - Agent Framework)
+
+This script uses Agent Frameworks. Currently, `smolagents` is supported.
+
+```bash
+# Set environment variables potentially used by the framework/model (e.g., litellm)
+export OPENAI_API_KEY="your_openai_api_key" # Or other keys if using different models via litellm
+export DATASET="challenge_100"
+export AGENT_FRAMEWORK="smolagents"
+export MODEL_ID="openai/gpt-4.1-2025-04-14" # Model ID supported by the framework (e.g., litellm)
+
+# Run evaluation using smolagents
+python -m eval.run_agent \
+    --dataset ${DATASET} \
+    --output_csv ../data/benchmark_results/${DATASET}/${AGENT_FRAMEWORK}-${MODEL_ID//\//-}.csv \
+    --agent_framework ${AGENT_FRAMEWORK} \
+    --model ${MODEL_ID} \
+    --num_empty_cells 0 5 10 \
+    --n_response_idxs 0 1 2 3 4 \
+    --puzzle_size 4 \
+    --batch_size 15
 ```
 
 ### Command-Line Arguments
+
+Most arguments are shared between `run.py` and `run_agent.py`.
 
 #### Dataset Selection
 - `--dataset`: Dataset to evaluate on. Choices: `"challenge_100"`, `"nikoli_100"`, `"ctc"`. Required.
@@ -52,6 +85,7 @@ python -m eval.run \
 - `--ilocs`: Specific puzzle indices to evaluate (overrides start/end)
 
 #### Evaluation Parameters
+- `--puzzle_size`: Filter puzzles by size (e.g., 4 for 4x4). Default: None (use all sizes).
 - `--num_empty_cells`: Number of empty cells in the initial board after hint fill (default: [0, 10, 20])
   - 0 means using the original board without additional hints
   - Values > 0 will randomly fill hints from the solution, leaving specified number of cells empty
@@ -72,7 +106,7 @@ python -m eval.run \
 - `--max_retries`: Maximum number of retries for API calls (default: 3)
 - `--retry_delay`: Delay between retries in seconds (default: 5.0)
 
-#### vLLM-Specific Parameters
+#### vLLM-Specific Parameters (for `run.py` with `--api vllm`)
 - `--tensor_parallel_size`: Tensor parallel size for vLLM (default: 1)
 - `--pipeline_parallel_size`: Pipeline parallel size for vLLM (default: 1)
 - `--draft_model`: Optional draft model path for speculative decoding
