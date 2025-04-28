@@ -447,6 +447,8 @@ def main():
                         help="Specific puzzle indices to evaluate. Overrides start/end.")
 
     # Eval setting
+    parser.add_argument("--puzzle_size", type=int, default=None,
+                        help="Filter puzzles by size (e.g., 4 for 4x4). If None, use all sizes.")
     # The number of evaluations for each puzzle is the product of the following four arguments.
     parser.add_argument("--num_empty_cells", type=int, nargs="+", default=[0, 10, 20],
                         help="Number of empty cells in the intial board after hint fill in random cells. "
@@ -498,6 +500,17 @@ def main():
     # Load puzzle
     dataset = datasets.load_dataset("SakanaAI/Sudoku-Bench", args.dataset, split="test")
     
+    # Filter by puzzle size if specified
+    if args.puzzle_size is not None:
+        print(f"Filtering dataset for puzzle size: {args.puzzle_size}x{args.puzzle_size}")
+        original_count = len(dataset)
+        dataset = dataset.filter(lambda example: example.get('rows') == args.puzzle_size and example.get('cols') == args.puzzle_size)
+        filtered_count = len(dataset)
+        print(f"Filtered dataset from {original_count} to {filtered_count} puzzles.")
+        if filtered_count == 0:
+            print(f"Warning: No puzzles found for size {args.puzzle_size}x{args.puzzle_size} in dataset {args.dataset}. Exiting.")
+            return
+
     # Use a subset of puzzles if specified
     if args.ilocs is not None:
         ilocs = args.ilocs

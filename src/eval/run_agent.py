@@ -51,22 +51,22 @@ import sys
 from typing import Any, Dict, List, Optional, Union
 import uuid
 
-import aiohttp
-import anthropic
+# import aiohttp
+# import anthropic
 import datasets
 import jinja2
-import openai
+# import openai
 import pandas as pd
 from tqdm import tqdm
-from transformers import AutoTokenizer
-try:
-    from vllm import AsyncLLMEngine, SamplingParams
-    from vllm.engine.arg_utils import AsyncEngineArgs
-except ImportError:
-    print("vllm not installed. Please install vllm to use it.")
-    AsyncLLMEngine = None
-    SamplingParams = None
-    AsyncEngineArgs = None
+# from transformers import AutoTokenizer
+# try:
+#     from vllm import AsyncLLMEngine, SamplingParams
+#     from vllm.engine.arg_utils import AsyncEngineArgs
+# except ImportError:
+#     print("vllm not installed. Please install vllm to use it.")
+#     AsyncLLMEngine = None
+#     SamplingParams = None
+#     AsyncEngineArgs = None
 
 # Add smolagents imports
 try:
@@ -85,6 +85,7 @@ from eval.utils import (
     extract_action_from_response,
     pretty_print_visual_elements,
     random_fill_hints,
+    smolagents_output_to_string,
 )
 from sudoku_ds import (
     SudokuAction,
@@ -216,18 +217,19 @@ async def process_one(
                     # TODO: Check smolagents documentation for async run or use asyncio.to_thread
                     # The initial 'history_conversation' is not directly used by agent.run's state
                     # We need to manually manage the state via reset=True/False
-                    assistant_response = await asyncio.to_thread(
+                    result = await asyncio.to_thread(
                         agent.run,
                         initial_user_message,
                         reset=True # Reset agent's internal memory
                     )
                 # For subsequent turns, use only the current board prompt and don't reset
                 else:
-                    assistant_response = await asyncio.to_thread(
+                    result = await asyncio.to_thread(
                         agent.run,
                         board_prompt,
                         reset=False # Maintain agent's internal memory
                     )
+                assistant_response = smolagents_output_to_string(result)
             except Exception as e:
                 # TODO: Implement retry logic similar to the original call_api if needed
                 print(f"[Fail] {round_str}. Error calling smolagent: {e}")

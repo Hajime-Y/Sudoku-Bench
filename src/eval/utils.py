@@ -1,5 +1,6 @@
 import random
 import re
+from typing import Any
 
 
 def pretty_print_visual_elements(visual_elements: list) -> str:
@@ -100,3 +101,21 @@ def random_fill_hints(initial_board: str, solution: str, num_empty_cells: int, s
     for i in blanks:
         initial_board[i] = solution[i]
     return ''.join(initial_board)
+
+
+def smolagents_output_to_string(output: Any) -> str:
+    """
+    Convert smolagents `agent.run` output (AgentText, AgentImage, AgentAudio, etc.)
+    into a single unified string representation.
+    """
+    # If the object provides a to_string() method, call it
+    to_string_method = getattr(output, "to_string", None)
+    if callable(to_string_method):
+        return to_string_method()
+
+    # If the output is a sequence, convert each element recursively and concatenate
+    if isinstance(output, (list, tuple)):
+        return "".join(smolagents_output_to_string(item) for item in output)
+
+    # Otherwise, fall back to the built-in str()
+    return str(output)
