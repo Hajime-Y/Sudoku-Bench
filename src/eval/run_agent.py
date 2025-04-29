@@ -88,6 +88,15 @@ except ImportError:
     OpenAIUsage = None
     OpenAIModelSettings = None
 
+# Add langgraph imports
+try:
+    from langgraph.prebuilt import create_react_agent
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    print("langgraph or langchain-openai not installed. Please run `uv add langgraph langchain-openai`")
+    create_react_agent = None
+    ChatOpenAI = None
+
 from eval.prompts import (
     BOARD_PROMPT,
     PREFILLED_ASSISTANT_RESPONSE,
@@ -163,6 +172,9 @@ async def process_one(
     agent = None
     runner_input = None # Initialize runner_input for openai_agents
     total_usage = None # Initialize usage counter
+    total_input_tokens_lg = 0 # Initialize langgraph token counters
+    total_output_tokens_lg = 0
+
     if args.agent_framework == "smolagents":
         if CodeAgent is None or LiteLLMModel is None:
             raise ImportError("smolagents is not installed. Please run `pip install -r requirements.txt`")
@@ -191,14 +203,37 @@ async def process_one(
                 temperature=args.temperature,
                 top_p=args.top_p,
                 max_tokens=args.max_tokens,
-            ),
-            # tools=[] # No tools for sudoku
+            )
         )
 
         # Initialize usage counter for openai_agents
         if OpenAIUsage is None:
             raise ImportError("openai-agents is not installed. Please run `uv add openai-agents`")
         total_usage = OpenAIUsage()
+    elif args.agent_framework == "langgraph":
+        if ChatOpenAI is None or create_react_agent is None:
+             raise ImportError("langgraph or langchain-openai not installed. Please run `uv add langgraph langchain-openai`")
+
+        # Process model name for langgraph with ChatOpenAI
+        processed_model_name = model
+        if "/" in model:
+            prefix, suffix = model.split("/", 1)
+            if prefix == "openai":
+                processed_model_name = suffix
+            else:
+                raise ValueError(f"Unsupported model prefix for langgraph: {prefix}. Only 'openai/' is supported.")
+        # If no "/" found, use the original model name
+
+        if prefix == "openai":
+            llm = ChatOpenAI(
+                model=processed_model_name,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                max_tokens=args.max_tokens,
+            )
+            
+        # LangGraph's ReAct agent doesn't explicitly take instructions like OpenAI Agents.
+        agent = create_react_agent(llm, tools=[])
 
     num_correct_placements = 0
     assistant_response = None # Initialize assistant_response
@@ -237,9 +272,6 @@ async def process_one(
 
         # Call agent
         if args.agent_framework == "smolagents":
-            if agent is None:
-                 print(f"[Fail] {round_str}. Smolagent not initialized.")
-                 break
             try:
                 # For the first turn, combine rule and board prompts, and reset history
                 if round_idx == 0:
@@ -274,9 +306,6 @@ async def process_one(
                 print(f"Using previous response due to error.")
 
         elif args.agent_framework == "openai_agents":
-            if agent is None:
-                 print(f"[Fail] {round_str}. OpenAI Agent not initialized.")
-                 break
             try:
                 # For the first turn, runner_input is just the board prompt
                 if round_idx == 0:
@@ -311,14 +340,28 @@ async def process_one(
                     break
                 print(f"Using previous response due to error.")
 
-        # --- Placeholder for other API/Agent Frameworks ---
-        # elif args.api == "openai":
-        #     # Original call_api logic or a refactored version for OpenAI
-        #     pass # Replace with actual call
-        # elif args.api == "anthropic":
-        #     # Original call_api logic or a refactored version for Anthropic
-        #     pass # Replace with actual call
-        # ... etc.
+        elif args.agent_framework == "langgraph":
+            try:
+                # Invoke the LangGraph agent asynchronously
+                # The history is passed in the input dictionary under the 'messages' key
+                result = await agent.invoke({"messages": input_conversation})
+
+                # Extract the assistant's response message object (should be a dict)
+                assistant_message_dict = result["messages"][-1]
+                assistant_response = assistant_message_dict.content
+
+                # Accumulate token usage if available in response_metadata
+                usage = assistant_message_dict.response_metadata["token_usage"]
+                total_input_tokens_lg += usage.get('prompt_tokens', 0)
+                total_output_tokens_lg += usage.get('completion_tokens', 0)
+
+            except Exception as e:
+                print(f"[Fail] {round_str}. Error calling LangGraph Agent: {e}")
+                # Use the previous response if available, otherwise break
+                if assistant_response is None:
+                    break
+                print(f"Using previous response due to error.")
+
         else:
              print(f"[Fail] {round_str}. Unsupported Agent Framework: {args.agent_framework}")
              break
@@ -400,6 +443,9 @@ async def process_one(
     elif args.agent_framework == "openai_agents":
         total_input_tokens = total_usage.input_tokens
         total_output_tokens = total_usage.output_tokens
+    elif args.agent_framework == "langgraph":
+        total_input_tokens = total_input_tokens_lg
+        total_output_tokens = total_output_tokens_lg
 
 
     return {
@@ -526,7 +572,7 @@ def main():
 
     # Model
     parser.add_argument("--agent_framework", type=str, default="smolagents",
-                        choices=["smolagents", "openai_agents"],
+                        choices=["smolagents", "openai_agents", "langgraph"],
                         help="Agent Framework or direct API to use for evaluation.")
     parser.add_argument("--model", type=str, required=True,
                         help="Model name or path.")
