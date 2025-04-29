@@ -406,7 +406,7 @@ async def process_one(
         # From input
         "data_source": args.dataset,
         "puzzle_id": request["puzzle_id"],
-        "model": args.model_save_name if args.model_save_name else f"{args.agent_framework}_{model}",
+        "model": args.model_save_name if args.model_save_name else f"{args.agent_framework}-{model}",
         "num_empty_cells": request["num_empty_cells"],
         "shuffle_seed": request["shuffle_seed"],
         "n_response_idx": request["n_response_idx"],
