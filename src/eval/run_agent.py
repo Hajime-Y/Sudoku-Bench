@@ -160,6 +160,7 @@ async def process_one(
 
     # Initialize smolagents CodeAgent if api is smolagents
     agent = None
+    runner_input = None # Initialize runner_input for openai_agents
     total_usage = None # Initialize usage counter
     if args.agent_framework == "smolagents":
         if CodeAgent is None or LiteLLMModel is None:
@@ -176,11 +177,6 @@ async def process_one(
             tools=[], # No tools needed for Sudoku
             model=llm_model,
         )
-        # Initialize usage counter for openai_agents
-        if OpenAIUsage is None:
-            raise ImportError("openai-agents is not installed. Please run `uv add openai-agents`")
-        total_usage = OpenAIUsage()
-
     elif args.agent_framework == "openai_agents":
         if OpenAIAgent is None or Runner is None:
              raise ImportError("openai-agents is not installed. Please run `uv add openai-agents`")
@@ -279,18 +275,31 @@ async def process_one(
                  print(f"[Fail] {round_str}. OpenAI Agent not initialized.")
                  break
             try:
-                # Use the current history_conversation directly
-                input_for_runner = history_conversation
+                # For the first turn, runner_input is just the board prompt
+                if round_idx == 0:
+                    # The instructions already contain the rules and prefilled response
+                    # So the first user message is just the initial board state
+                    runner_input = [{"role": "user", "content": board_prompt}]
+                # For subsequent turns, append the new board prompt to the previous conversation history
+                else:
+                    # Ensure runner_input is a list (should be from result.to_input_list())
+                    if not isinstance(runner_input, list):
+                         print(f"[Fail] {round_str}. Invalid runner_input state.")
+                         break
+                    runner_input.append({"role": "user", "content": board_prompt})
 
                 # Run the agent
-                result = await Runner.run(agent, input_for_runner)
+                # TODO: Add trace context manager if needed for detailed tracing
+                result = await Runner.run(agent, runner_input)
                 assistant_response = result.final_output
+
+                # Prepare input for the next turn using the full history from the result
+                runner_input = result.to_input_list()
 
                 # Accumulate token usage
                 if total_usage is not None:
                     for resp in result.raw_responses:
-                        if hasattr(resp, 'usage') and resp.usage: # Reinstated check
-                            total_usage.add(resp.usage)
+                        total_usage.add(resp.usage)
 
             except Exception as e:
                 print(f"[Fail] {round_str}. Error calling OpenAI Agent: {e}")
@@ -386,13 +395,8 @@ async def process_one(
         total_input_tokens = token_counts.get("input", 0)
         total_output_tokens = token_counts.get("output", 0)
     elif args.agent_framework == "openai_agents":
-        if total_usage is not None:
-            total_input_tokens = total_usage.input_tokens
-            total_output_tokens = total_usage.output_tokens
-        else:
-            print("Warning: OpenAIUsage object not initialized. Token counts will be zero.")
-            total_input_tokens = 0
-            total_output_tokens = 0
+        total_input_tokens = total_usage.input_tokens
+        total_output_tokens = total_usage.output_tokens
 
 
     return {
