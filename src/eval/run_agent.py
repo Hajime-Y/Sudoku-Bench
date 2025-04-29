@@ -80,12 +80,13 @@ except ImportError:
 
 # Add openai-agents imports
 try:
-    from agents import Agent as OpenAIAgent, Runner, Usage as OpenAIUsage # Import necessary components and alias Agent and Usage
+    from agents import Agent as OpenAIAgent, Runner, Usage as OpenAIUsage, ModelSettings as OpenAIModelSettings # Import necessary components and alias Agent and Usage
 except ImportError:
     print("openai-agents not installed. Please run `uv add openai-agents`")
     OpenAIAgent = None
     Runner = None
     OpenAIUsage = None
+    OpenAIModelSettings = None
 
 from eval.prompts import (
     BOARD_PROMPT,
@@ -186,9 +187,11 @@ async def process_one(
             name="SudokuSolver",
             instructions=agent_instructions,
             model=model, # Use the model specified in args
-            temperature=args.temperature,
-            top_p=args.top_p,
-            max_tokens=args.max_tokens,
+            model_settings=OpenAIModelSettings(
+                temperature=args.temperature,
+                top_p=args.top_p,
+                max_tokens=args.max_tokens,
+            ),
             # tools=[] # No tools for sudoku
         )
 
@@ -403,7 +406,7 @@ async def process_one(
         # From input
         "data_source": args.dataset,
         "puzzle_id": request["puzzle_id"],
-        "model": args.model_save_name if args.model_save_name else model,
+        "model": args.model_save_name if args.model_save_name else f"{args.agent_framework}_{model}",
         "num_empty_cells": request["num_empty_cells"],
         "shuffle_seed": request["shuffle_seed"],
         "n_response_idx": request["n_response_idx"],
