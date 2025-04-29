@@ -38,6 +38,8 @@ A CSV file with columns:
     "num_correct_placements",
     "final_solved",
     "final_board",
+    "total_input_tokens",
+    "total_output_tokens",
 ]
 
 Plus a summary of average correctness/final-solved rates in stdout.
@@ -318,6 +320,15 @@ async def process_one(
     final_board_ascii = current_board.to_ascii(unfilled=".")
     final_solved = 1 if (final_board_ascii == solution_ascii) else 0
 
+    # Get token counts if using smolagents
+    total_input_tokens = 0
+    total_output_tokens = 0
+    if args.agent_framework == "smolagents" and agent is not None:
+        token_counts = agent.monitor.get_total_token_counts()
+        total_input_tokens = token_counts.get("input", 0)
+        total_output_tokens = token_counts.get("output", 0)
+
+
     return {
         # From input
         "data_source": args.dataset,
@@ -335,6 +346,9 @@ async def process_one(
         "num_correct_placements": num_correct_placements,
         "final_solved": final_solved,
         "final_board": final_board_ascii,
+        # Added token counts
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
     }
 
 
