@@ -78,6 +78,15 @@ except ImportError:
     CodeAgent = None
     LiteLLMModel = None
 
+# Add openai-agents imports
+try:
+    from agents import Agent as OpenAIAgent, Runner, Usage as OpenAIUsage # Import necessary components and alias Agent and Usage
+except ImportError:
+    print("openai-agents not installed. Please run `uv add openai-agents`")
+    OpenAIAgent = None
+    Runner = None
+    OpenAIUsage = None
+
 from eval.prompts import (
     BOARD_PROMPT,
     PREFILLED_ASSISTANT_RESPONSE,
@@ -151,6 +160,7 @@ async def process_one(
 
     # Initialize smolagents CodeAgent if api is smolagents
     agent = None
+    total_usage = None # Initialize usage counter
     if args.agent_framework == "smolagents":
         if CodeAgent is None or LiteLLMModel is None:
             raise ImportError("smolagents is not installed. Please run `pip install -r requirements.txt`")
@@ -166,7 +176,30 @@ async def process_one(
             tools=[], # No tools needed for Sudoku
             model=llm_model,
         )
-        
+        # Initialize usage counter for openai_agents
+        if OpenAIUsage is None:
+            raise ImportError("openai-agents is not installed. Please run `uv add openai-agents`")
+        total_usage = OpenAIUsage()
+
+    elif args.agent_framework == "openai_agents":
+        if OpenAIAgent is None or Runner is None:
+             raise ImportError("openai-agents is not installed. Please run `uv add openai-agents`")
+        # Instructions combine rules and initial assistant prompt
+        agent_instructions = f"{rule_prompt}\n\n{PREFILLED_ASSISTANT_RESPONSE}"
+        agent = OpenAIAgent( # Use the aliased name
+            name="SudokuSolver",
+            instructions=agent_instructions,
+            model=model, # Use the model specified in args
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_tokens=args.max_tokens,
+            # tools=[] # No tools for sudoku
+        )
+
+        # Initialize usage counter for openai_agents
+        if OpenAIUsage is None:
+            raise ImportError("openai-agents is not installed. Please run `uv add openai-agents`")
+        total_usage = OpenAIUsage()
 
     num_correct_placements = 0
     assistant_response = None # Initialize assistant_response
@@ -239,6 +272,31 @@ async def process_one(
                 if assistant_response is None:
                     break
                 # If there was a previous response, try to reuse it or handle error
+                print(f"Using previous response due to error.")
+
+        elif args.agent_framework == "openai_agents":
+            if agent is None:
+                 print(f"[Fail] {round_str}. OpenAI Agent not initialized.")
+                 break
+            try:
+                # Use the current history_conversation directly
+                input_for_runner = history_conversation
+
+                # Run the agent
+                result = await Runner.run(agent, input_for_runner)
+                assistant_response = result.final_output
+
+                # Accumulate token usage
+                if total_usage is not None:
+                    for resp in result.raw_responses:
+                        if hasattr(resp, 'usage') and resp.usage: # Reinstated check
+                            total_usage.add(resp.usage)
+
+            except Exception as e:
+                print(f"[Fail] {round_str}. Error calling OpenAI Agent: {e}")
+                # Use the previous response if available, otherwise break
+                if assistant_response is None:
+                    break
                 print(f"Using previous response due to error.")
 
         # --- Placeholder for other API/Agent Frameworks ---
@@ -327,6 +385,14 @@ async def process_one(
         token_counts = agent.monitor.get_total_token_counts()
         total_input_tokens = token_counts.get("input", 0)
         total_output_tokens = token_counts.get("output", 0)
+    elif args.agent_framework == "openai_agents":
+        if total_usage is not None:
+            total_input_tokens = total_usage.input_tokens
+            total_output_tokens = total_usage.output_tokens
+        else:
+            print("Warning: OpenAIUsage object not initialized. Token counts will be zero.")
+            total_input_tokens = 0
+            total_output_tokens = 0
 
 
     return {
@@ -453,7 +519,7 @@ def main():
 
     # Model
     parser.add_argument("--agent_framework", type=str, default="smolagents",
-                        choices=["smolagents"],
+                        choices=["smolagents", "openai_agents"],
                         help="Agent Framework or direct API to use for evaluation.")
     parser.add_argument("--model", type=str, required=True,
                         help="Model name or path.")
@@ -484,12 +550,12 @@ def main():
     
     args = parser.parse_args()
 
-    # Add check for n_history_turns when using smolagents
-    if args.agent_framework == "smolagents":
+    # Add check for n_history_turns when using agent frameworks that manage history
+    if args.agent_framework in ["smolagents", "openai_agents"]:
         if any(n != -1 for n in args.n_history_turns):
             raise ValueError(
-                "--n_history_turns must be [-1] when using agent_framework='smolagents'. "
-                "smolagents manages its own history." 
+                f"--n_history_turns must be [-1] when using agent_framework='{args.agent_framework}'. "
+                f"{args.agent_framework} manages its own history."
             )
 
     # Sanity check

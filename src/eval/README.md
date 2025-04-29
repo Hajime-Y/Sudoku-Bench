@@ -65,8 +65,8 @@ python -m eval.run_agent \
     --output_csv ../data/benchmark_results/${DATASET}/${AGENT_FRAMEWORK}-${MODEL_ID//\//-}.csv \
     --agent_framework ${AGENT_FRAMEWORK} \
     --model ${MODEL_ID} \
-    --num_empty_cells 0 5 10 \
-    --n_response_idxs 0 1 2 3 4 \
+    --num_empty_cells 5 \
+    --n_history_turns -1 \
     --puzzle_size 4 \
     --batch_size 15
 ```
