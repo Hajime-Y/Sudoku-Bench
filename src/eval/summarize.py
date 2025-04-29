@@ -88,6 +88,8 @@ def generate_model_summary(df_reset):
     For each model:
     1) Average correct placements
     2) Average solve rate
+    3) Average input tokens
+    4) Average output tokens
     
     Both metrics are averaged across num_empty_cells but take max across settings.
     Also includes per num_empty_cells breakdowns.
@@ -104,6 +106,10 @@ def generate_model_summary(df_reset):
         max_placements = summary_data['avg_correct_placements'].max()
         min_solve_rate = summary_data['avg_solve_rate'].min()
         max_solve_rate = summary_data['avg_solve_rate'].max()
+        min_input_tokens = summary_data['avg_input_tokens'].min() if 'avg_input_tokens' in summary_data.columns else 0
+        max_input_tokens = summary_data['avg_input_tokens'].max() if 'avg_input_tokens' in summary_data.columns else 0
+        min_output_tokens = summary_data['avg_output_tokens'].min() if 'avg_output_tokens' in summary_data.columns else 0
+        max_output_tokens = summary_data['avg_output_tokens'].max() if 'avg_output_tokens' in summary_data.columns else 0
         
         # Start the card HTML
         card = f"""
@@ -119,6 +125,8 @@ def generate_model_summary(df_reset):
                                 <th>Model</th>
                                 <th>Avg. Correct Placements</th>
                                 <th>Avg. Solve Rate (%)</th>
+                                <th>Avg. Input Tokens</th>
+                                <th>Avg. Output Tokens</th>
                                 <th>Best Setting</th>
         """
         
@@ -140,6 +148,8 @@ def generate_model_summary(df_reset):
                                 <th></th>
                                 <th></th>
                                 <th></th>
+                                <th></th>
+                                <th></th>
             """
             
             # Add subheaders for each empty cells value
@@ -147,6 +157,8 @@ def generate_model_summary(df_reset):
                 card += """
                                 <th>Correct</th>
                                 <th>Solve %</th>
+                                <th>In Tok</th>
+                                <th>Out Tok</th>
                 """
         
         # Close the header
@@ -178,12 +190,28 @@ def generate_model_summary(df_reset):
             text_color_p = "#000000" if l_p > 60 else "#ffffff"
             text_color_s = "#000000" if l_s > 60 else "#ffffff"
             
+            # Colors and text colors for tokens (use different palettes, e.g., Purples/Greys)
+            input_tokens_norm = (row['avg_input_tokens'] - min_input_tokens) / (max_input_tokens - min_input_tokens) if 'avg_input_tokens' in row and max_input_tokens > min_input_tokens else 0.5
+            output_tokens_norm = (row['avg_output_tokens'] - min_output_tokens) / (max_output_tokens - min_output_tokens) if 'avg_output_tokens' in row and max_output_tokens > min_output_tokens else 0.5
+            
+            h_in_tok = 270 # Purple hue for input tokens
+            s_in_tok = int(30 + (50 * input_tokens_norm))
+            l_in_tok = int(95 - (40 * input_tokens_norm))
+            text_color_in_tok = "#000000" if l_in_tok > 60 else "#ffffff"
+            
+            h_out_tok = 0 # Grey scale for output tokens (adjust saturation/lightness)
+            s_out_tok = 0 
+            l_out_tok = int(95 - (40 * output_tokens_norm))
+            text_color_out_tok = "#000000" if l_out_tok > 60 else "#ffffff"
+            
             # Start the row with the main metrics
             card += f"""
                             <tr>
                                 <td>{row['model']}</td>
                                 <td style="background-color: hsl({h_p}, {s_p}%, {l_p}%); color: {text_color_p};">{row['avg_correct_placements']:.2f}</td>
                                 <td style="background-color: hsl({h_s}, {s_s}%, {l_s}%); color: {text_color_s};">{row['avg_solve_rate']:.2f}</td>
+                                <td style="background-color: hsl({h_in_tok}, {s_in_tok}%, {l_in_tok}%); color: {text_color_in_tok};">{row.get('avg_input_tokens', 0):.0f}</td>
+                                <td style="background-color: hsl({h_out_tok}, {s_out_tok}%, {l_out_tok}%); color: {text_color_out_tok};">{row.get('avg_output_tokens', 0):.0f}</td>
                                 <td>{row['best_setting']}</td>
             """
             
@@ -205,9 +233,16 @@ def generate_model_summary(df_reset):
                         ec_placements = model_ec_data['avg_correct_placements'].values[0]
                         ec_solve_rate = model_ec_data['avg_solve_rate'].values[0]
                         
-                        # Calculate color intensities
+                        # Get token values for this specific empty cell count, default to 0 if missing
+                        ec_input_tokens = model_ec_data.get('avg_input_tokens', pd.Series([0])).fillna(0).values[0]
+                        ec_output_tokens = model_ec_data.get('avg_output_tokens', pd.Series([0])).fillna(0).values[0]
+                        
+                        # Calculate color intensities only if data exists
                         ec_placement_norm = (ec_placements - min_placements) / (max_placements - min_placements) if max_placements > min_placements else 0.5
                         ec_solve_rate_norm = (ec_solve_rate - min_solve_rate) / (max_solve_rate - min_solve_rate) if max_solve_rate > min_solve_rate else 0.5
+                        
+                        ec_input_tokens_norm = (ec_input_tokens - min_input_tokens) / (max_input_tokens - min_input_tokens) if max_input_tokens > min_input_tokens else 0.5
+                        ec_output_tokens_norm = (ec_output_tokens - min_output_tokens) / (max_output_tokens - min_output_tokens) if max_output_tokens > min_output_tokens else 0.5
                         
                         # Colors for the per-empty-cells values
                         h_ec_p = 210  # Blue hue
@@ -222,13 +257,31 @@ def generate_model_summary(df_reset):
                         text_color_ec_p = "#000000" if l_ec_p > 60 else "#ffffff"
                         text_color_ec_s = "#000000" if l_ec_s > 60 else "#ffffff"
                         
+                        # Colors and text colors for tokens
+                        h_ec_in_tok = 270
+                        s_ec_in_tok = int(30 + (50 * ec_input_tokens_norm))
+                        l_ec_in_tok = int(95 - (40 * ec_input_tokens_norm))
+                        text_color_ec_in_tok = "#000000" if l_ec_in_tok > 60 else "#ffffff"
+                        
+                        h_ec_out_tok = 0
+                        s_ec_out_tok = 0
+                        l_ec_out_tok = int(95 - (40 * ec_output_tokens_norm))
+                        text_color_ec_out_tok = "#000000" if l_ec_out_tok > 60 else "#ffffff"
+                        
+                        # Add placement and solve rate cells
                         card += f"""
                                 <td style="background-color: hsl({h_ec_p}, {s_ec_p}%, {l_ec_p}%); color: {text_color_ec_p};">{ec_placements:.2f}</td>
-                                <td style="background-color: hsl({h_ec_s}, {s_ec_s}%, {l_ec_s}%); color: {text_color_ec_s};">{ec_solve_rate:.2f}</td>
+                                <td style="background-color: hsl({h_ec_s}, {s_ec_s}%, {l_ec_s}%); color: {text_color_ec_s};">{ec_solve_rate:.2f}</td>"""
+                        # Add token cells
+                        card += f"""
+                                <td style="background-color: hsl({h_ec_in_tok}, {s_ec_in_tok}%, {l_ec_in_tok}%); color: {text_color_ec_in_tok};">{ec_input_tokens:.0f}</td>
+                                <td style="background-color: hsl({h_ec_out_tok}, {s_ec_out_tok}%, {l_ec_out_tok}%); color: {text_color_ec_out_tok};">{ec_output_tokens:.0f}</td>
                         """
                     else:
                         # No data for this combination
                         card += """
+                                <td>N/A</td>
+                                <td>N/A</td>
                                 <td>N/A</td>
                                 <td>N/A</td>
                         """
@@ -262,11 +315,13 @@ def generate_model_summary(df_reset):
         # For each model and setting, calculate average across all num_empty_cells and data_sources
         overall_avg = summary_df.groupby(['model', 'setting']).agg({
             ('num_correct_placements', 'mean'): 'mean',
-            ('final_solved', 'mean'): 'mean'
+            ('final_solved', 'mean'): 'mean',
+            ('total_input_tokens', 'mean'): 'mean',
+            ('total_output_tokens', 'mean'): 'mean'
         }).reset_index()
         
         # Rename columns for clarity
-        overall_avg.columns = ['model', 'setting', 'avg_correct_placements', 'avg_solve_rate']
+        overall_avg.columns = ['model', 'setting', 'avg_correct_placements', 'avg_solve_rate', 'avg_input_tokens', 'avg_output_tokens']
         
         # Convert solve rate to percentage
         overall_avg['avg_solve_rate'] = overall_avg['avg_solve_rate'] * 100
@@ -281,11 +336,13 @@ def generate_model_summary(df_reset):
         # For each model, setting, and num_empty_cells, calculate averages
         ec_avg = summary_df.groupby(['model', 'setting', 'num_empty_cells']).agg({
             ('num_correct_placements', 'mean'): 'mean',
-            ('final_solved', 'mean'): 'mean'
+            ('final_solved', 'mean'): 'mean',
+            ('total_input_tokens', 'mean'): 'mean',
+            ('total_output_tokens', 'mean'): 'mean'
         }).reset_index()
         
         # Rename columns
-        ec_avg.columns = ['model', 'setting', 'num_empty_cells', 'avg_correct_placements', 'avg_solve_rate']
+        ec_avg.columns = ['model', 'setting', 'num_empty_cells', 'avg_correct_placements', 'avg_solve_rate', 'avg_input_tokens', 'avg_output_tokens']
         
         # Convert solve rate to percentage
         ec_avg['avg_solve_rate'] = ec_avg['avg_solve_rate'] * 100
@@ -309,11 +366,13 @@ def generate_model_summary(df_reset):
             # For each model and setting, calculate average across all num_empty_cells
             ds_avg = ds_data.groupby(['model', 'setting']).agg({
                 ('num_correct_placements', 'mean'): 'mean',
-                ('final_solved', 'mean'): 'mean'
+                ('final_solved', 'mean'): 'mean',
+                ('total_input_tokens', 'mean'): 'mean',
+                ('total_output_tokens', 'mean'): 'mean'
             }).reset_index()
             
             # Rename columns for clarity
-            ds_avg.columns = ['model', 'setting', 'avg_correct_placements', 'avg_solve_rate']
+            ds_avg.columns = ['model', 'setting', 'avg_correct_placements', 'avg_solve_rate', 'avg_input_tokens', 'avg_output_tokens']
             
             # Convert solve rate to percentage
             ds_avg['avg_solve_rate'] = ds_avg['avg_solve_rate'] * 100
@@ -328,11 +387,13 @@ def generate_model_summary(df_reset):
             # For each model, setting, and num_empty_cells, calculate averages
             ds_ec_avg = ds_data.groupby(['model', 'setting', 'num_empty_cells']).agg({
                 ('num_correct_placements', 'mean'): 'mean',
-                ('final_solved', 'mean'): 'mean'
+                ('final_solved', 'mean'): 'mean',
+                ('total_input_tokens', 'mean'): 'mean',
+                ('total_output_tokens', 'mean'): 'mean'
             }).reset_index()
             
             # Rename columns
-            ds_ec_avg.columns = ['model', 'setting', 'num_empty_cells', 'avg_correct_placements', 'avg_solve_rate']
+            ds_ec_avg.columns = ['model', 'setting', 'num_empty_cells', 'avg_correct_placements', 'avg_solve_rate', 'avg_input_tokens', 'avg_output_tokens']
             
             # Convert solve rate to percentage
             ds_ec_avg['avg_solve_rate'] = ds_ec_avg['avg_solve_rate'] * 100
@@ -364,6 +425,9 @@ def format_summary_table(summary_df):
         # Get the actual column names
         cols = list(styled_df.columns)
         
+        # Define token columns (handle potential absence)
+        token_cols = [col for col in cols if col[0] in ['total_input_tokens', 'total_output_tokens'] and col[1] == 'mean']
+        
         # Create dictionaries to map column types to color maps
         mean_cols = [col for col in cols if col[1] == 'mean']
         max_cols = [col for col in cols if col[1] == 'max']
@@ -371,14 +435,27 @@ def format_summary_table(summary_df):
         
         # Apply different color schemes to different column types
         if mean_cols:
-            styled = styled.background_gradient(cmap='YlGnBu', subset=mean_cols)
+            # Exclude token cols from this gradient if they exist
+            plot_mean_cols = [col for col in mean_cols if col not in token_cols]
+            if plot_mean_cols:
+                styled = styled.background_gradient(cmap='YlGnBu', subset=plot_mean_cols)
         if max_cols:
             styled = styled.background_gradient(cmap='Oranges', subset=max_cols)
         if sum_cols:
             styled = styled.background_gradient(cmap='Greens', subset=sum_cols)
+        # Apply gradients to token columns separately
+        if token_cols:
+            input_token_col = [col for col in token_cols if col[0] == 'total_input_tokens']
+            output_token_col = [col for col in token_cols if col[0] == 'total_output_tokens']
+            if input_token_col:
+                styled = styled.background_gradient(cmap='Purples', subset=input_token_col)
+            if output_token_col:
+                styled = styled.background_gradient(cmap='Greys', subset=output_token_col)
             
         # Format the numeric columns for mean values
-        format_dict = {col: "{:.2f}" for col in mean_cols}
+        format_dict = {col: "{:.2f}" for col in mean_cols if col not in token_cols}
+        # Format token counts as integers
+        format_dict.update({col: "{:.0f}" for col in token_cols})
         styled = styled.format(format_dict)
         
     except Exception as e:
@@ -557,6 +634,7 @@ def generate_html_content(formatted_table, plot_files, model_summary_html):
                     <h2>Summary</h2>
                     <p>The following tables show the overall performance of each model. The "Avg." metrics are averaged across all difficulty levels ("Empty Cells"), but we only show the best setting for each model. Results are sorted by average correct placements (highest first).</p>
                     <p>"Correct" refers to the average number of correct placements, and "Solve %" is the average solve rate across all puzzles.</p>
+                    <p>"In Tok" and "Out Tok" refer to the average number of input and output tokens used per puzzle run, respectively.</p>
                     {model_summary_html}
                 </div>
             </div>
@@ -575,6 +653,7 @@ def generate_html_content(formatted_table, plot_files, model_summary_html):
                     <h2>Detailed Results</h2>
                     <p>The table below presents detailed statistics for each model configuration.</p>
                     <p>"num_correct_placements" refers to the number of correct placements, and "final_solved" indicates whether the puzzle was solved or not.</p>
+                    <p>"total_input_tokens" and "total_output_tokens" show the average token usage per puzzle run.</p>
                     <p>"num_correct_placements" shows a column of aggregation of "max" over all puzzles under the corresponding setting, while "final_solved" shows a column of aggregation of "sum". Note that some models are tested for multiple runs on each puzzle, so the entire number of tested puzzles ("count") can be different among models.</p>
                     <div class="table-responsive">
                         {formatted_table}
@@ -638,8 +717,21 @@ def main(args):
         # Read and concatenate all csvs
         df = pd.concat([pd.read_csv(csv_file) for csv_file in csv_filepaths])
 
+        # Ensure token columns exist, fill with 0 if not
+        if 'total_input_tokens' not in df.columns:
+            df['total_input_tokens'] = 0
+        if 'total_output_tokens' not in df.columns:
+            df['total_output_tokens'] = 0
+            
+        # Fill NA values in token columns with 0 (important for aggregation)
+        df['total_input_tokens'] = df['total_input_tokens'].fillna(0)
+        df['total_output_tokens'] = df['total_output_tokens'].fillna(0)
+        
         # Filter out columns of interest
-        df = df[["data_source", "model", "setting", "num_empty_cells", "num_correct_placements", "final_solved"]]
+        required_cols = ["data_source", "model", "setting", "num_empty_cells", 
+                         "num_correct_placements", "final_solved",
+                         "total_input_tokens", "total_output_tokens"]
+        df = df[required_cols]
         
         # Convert "0" in "num_empty_cells" column to "Original" as requested
         df['num_empty_cells'] = df['num_empty_cells'].replace(0, 'Original')
@@ -650,6 +742,8 @@ def main(args):
             {
                 "num_correct_placements": ["count", "mean", "max", "sum"],
                 "final_solved": ["count", "mean", "sum"],
+                "total_input_tokens": ["mean"],
+                "total_output_tokens": ["mean"],
             }
         )
         keep_cols = [
@@ -659,6 +753,8 @@ def main(args):
             ("final_solved", "count"),
             ("final_solved", "mean"),
             ("final_solved", "sum"),
+            ("total_input_tokens", "mean"),
+            ("total_output_tokens", "mean"),
         ]
         keep_cols = pd.MultiIndex.from_tuples(keep_cols)
         summary = summary[keep_cols]
