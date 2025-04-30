@@ -104,6 +104,16 @@ except ImportError:
     print("pydantic-ai not installed. Please run `uv add pydantic-ai`")
     PydanticAgent = None
 
+# Add agno imports
+try:
+    from agno.agent import Agent as AgnoAgent, RunResponse as AgnoRunResponse
+    from agno.models.openai import OpenAIChat as AgnoOpenAIChat
+except ImportError:
+    print("agno not installed. Please run `uv add agno`")
+    AgnoAgent = None
+    AgnoRunResponse = None
+    AgnoOpenAIChat = None
+
 from eval.prompts import (
     BOARD_PROMPT,
     PREFILLED_ASSISTANT_RESPONSE,
@@ -180,8 +190,6 @@ async def process_one(
     agent = None
     runner_input = None # Initialize runner_input for openai_agents
     total_usage = None # Initialize usage counter
-    total_input_tokens_lg = 0 # Initialize langgraph token counters
-    total_output_tokens_lg = 0
 
     if args.agent_framework == "smolagents":
         if CodeAgent is None or LiteLLMModel is None:
@@ -243,6 +251,9 @@ async def process_one(
         # LangGraph's ReAct agent doesn't explicitly take instructions like OpenAI Agents.
         agent = create_react_agent(llm, tools=[])
 
+        # Initialize usage counter for langgraph
+        total_usage = {"input_tokens": 0, "output_tokens": 0}
+
     elif args.agent_framework == "pydanticai":
         if PydanticAgent is None:
             raise ImportError("pydantic-ai is not installed. Please run `uv add pydantic-ai`")
@@ -268,6 +279,40 @@ async def process_one(
         )
 
         # Initialize usage counter for pydantic-ai
+        total_usage = {"input_tokens": 0, "output_tokens": 0}
+
+    elif args.agent_framework == "agno":
+        if AgnoAgent is None or AgnoOpenAIChat is None:
+            raise ImportError("agno not installed. Please run `uv add agno`")
+
+        # Process model name for agno (expects format like 'gpt-4.1-...')
+        processed_model_name = model
+        if "/" in model:
+            prefix, suffix = model.split("/", 1)
+            if prefix == "openai":
+                processed_model_name = suffix
+            else:
+                # Assuming non-openai prefixes might be handled directly or raise error later
+                # Adjust this logic based on supported models for agno
+                pass # Use suffix or original model name depending on agno's expectation
+
+        # Currently only supporting OpenAI models with agno
+        if prefix == "openai":
+             llm = AgnoOpenAIChat(
+                 id=processed_model_name,
+                 temperature=args.temperature,
+                 max_tokens=args.max_tokens,
+                 top_p=args.top_p,
+             )
+        else:
+            raise ValueError(f"Unsupported model provider for agno: {prefix}. Only 'openai/' is supported.")
+
+        agent = AgnoAgent(
+            model=llm,
+            tools=[], # No tools needed for Sudoku
+        )
+        
+        # Initialize usage counter for agno
         total_usage = {"input_tokens": 0, "output_tokens": 0}
 
     num_correct_placements = 0
@@ -387,8 +432,8 @@ async def process_one(
 
                 # Accumulate token usage if available in response_metadata
                 usage = assistant_message_dict.response_metadata["token_usage"]
-                total_input_tokens_lg += usage.get('prompt_tokens', 0)
-                total_output_tokens_lg += usage.get('completion_tokens', 0)
+                total_usage["input_tokens"] += usage.get('prompt_tokens', 0)
+                total_usage["output_tokens"] += usage.get('completion_tokens', 0)
 
             except Exception as e:
                 print(f"[Fail] {round_str}. Error calling LangGraph Agent: {e}")
@@ -398,17 +443,46 @@ async def process_one(
                 print(f"Using previous response due to error.")
 
         elif args.agent_framework == "pydanticai":
-            # Convert history to PydanticAI format
-            pydantic_history = convert_to_pydanticai_messages(input_conversation[:-1], model)
+            try:
+                # Convert history to PydanticAI format
+                pydantic_history = convert_to_pydanticai_messages(input_conversation[:-1], model)
 
-            # Run PydanticAI agent
-            result = await agent.run(user_prompt=input_conversation[-1]["content"], message_history=pydantic_history)
-            assistant_response = result.data
+                # Run PydanticAI agent
+                result = await agent.run(user_prompt=input_conversation[-1]["content"], message_history=pydantic_history)
+                assistant_response = result.data
 
-            # Get and accumulate token usage
-            usage = result.usage()
-            total_usage["input_tokens"] += usage.request_tokens or 0
-            total_usage["output_tokens"] += usage.response_tokens or 0
+                # Get and accumulate token usage
+                usage = result.usage()
+                total_usage["input_tokens"] += usage.request_tokens or 0
+                total_usage["output_tokens"] += usage.response_tokens or 0
+            except Exception as e:
+                print(f"[Fail] {round_str}. Error calling PydanticAI Agent: {e}")
+                # Use the previous response if available, otherwise break
+                if assistant_response is None:
+                    break
+                print(f"Using previous response due to error.")
+
+        elif args.agent_framework == "agno":
+            try:
+                # Invoke the Agno agent asynchronously
+                # Agno doesn't manage history internally, so we pass the constructed input_conversation
+                result: AgnoRunResponse = await agent.arun(messages=input_conversation)
+
+                # Extract the assistant's response
+                assistant_response = result.content
+                print(assistant_response)
+
+                # Get token usage for this round and accumulate
+                usage = result.metrics
+                total_usage["input_tokens"] += usage.get('prompt_tokens', [0])[-1] # Get the last value (current round)
+                total_usage["output_tokens"] += usage.get('completion_tokens', [0])[-1] # Get the last value (current round)
+
+            except Exception as e:
+                print(f"[Fail] {round_str}. Error calling Agno Agent: {e}")
+                # Use the previous response if available, otherwise break
+                if assistant_response is None:
+                    break
+                print(f"Using previous response due to error.")
 
         else:
              print(f"[Fail] {round_str}. Unsupported Agent Framework: {args.agent_framework}")
@@ -492,9 +566,12 @@ async def process_one(
         total_input_tokens = total_usage.input_tokens
         total_output_tokens = total_usage.output_tokens
     elif args.agent_framework == "langgraph":
-        total_input_tokens = total_input_tokens_lg
-        total_output_tokens = total_output_tokens_lg
+        total_input_tokens = total_usage["input_tokens"]
+        total_output_tokens = total_usage["output_tokens"]
     elif args.agent_framework == "pydanticai":
+        total_input_tokens = total_usage["input_tokens"]
+        total_output_tokens = total_usage["output_tokens"]
+    elif args.agent_framework == "agno":
         total_input_tokens = total_usage["input_tokens"]
         total_output_tokens = total_usage["output_tokens"]
 
@@ -622,13 +699,13 @@ def main():
 
     # Model
     parser.add_argument("--agent_framework", type=str, default="smolagents",
-                        choices=["smolagents", "openai_agents", "langgraph", "pydanticai"],
+                        choices=["smolagents", "openai_agents", "langgraph", "pydanticai", "agno"],
                         help="Agent Framework or direct API to use for evaluation.")
     parser.add_argument("--model", type=str, required=True,
                         help="Model name or path.")
     parser.add_argument("--model_save_name", type=str,
                         help="Model name in saved result. If not provided, use --model.")
-    parser.add_argument("--max_tokens", type=int, default=128000,
+    parser.add_argument("--max_tokens", type=int, default=32768,
                         help="Max tokens in each LLM response.")
     parser.add_argument("--temperature", type=float, default=0.1,
                         help="LLM temperature.")
