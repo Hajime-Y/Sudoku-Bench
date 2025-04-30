@@ -628,7 +628,7 @@ def main():
                         help="Model name or path.")
     parser.add_argument("--model_save_name", type=str,
                         help="Model name in saved result. If not provided, use --model.")
-    parser.add_argument("--max_tokens", type=int, default=8192,
+    parser.add_argument("--max_tokens", type=int, default=128000,
                         help="Max tokens in each LLM response.")
     parser.add_argument("--temperature", type=float, default=0.1,
                         help="LLM temperature.")
