@@ -180,6 +180,9 @@ async def process_one(
     agent = None
     runner_input = None # Initialize runner_input for openai_agents
     total_usage = None # Initialize usage counter
+    total_input_tokens_lg = 0 # Initialize langgraph token counters
+    total_output_tokens_lg = 0
+
     if args.agent_framework == "smolagents":
         if CodeAgent is None or LiteLLMModel is None:
             raise ImportError("smolagents is not installed. Please run `pip install -r requirements.txt`")
@@ -208,8 +211,7 @@ async def process_one(
                 temperature=args.temperature,
                 top_p=args.top_p,
                 max_tokens=args.max_tokens,
-            ),
-            # tools=[] # No tools for sudoku
+            )
         )
 
         # Initialize usage counter for openai_agents
@@ -257,7 +259,7 @@ async def process_one(
         # If no known prefix, use the original model name (might need adjustments based on pydantic-ai support)
 
         agent = PydanticAgent(
-            model_id=processed_model_id,
+            model=processed_model_id,
             model_settings={
                 'temperature': args.temperature,
                 'max_tokens': args.max_tokens,
@@ -305,9 +307,6 @@ async def process_one(
 
         # Call agent
         if args.agent_framework == "smolagents":
-            if agent is None:
-                 print(f"[Fail] {round_str}. Smolagent not initialized.")
-                 break
             try:
                 # For the first turn, combine rule and board prompts, and reset history
                 if round_idx == 0:
@@ -342,9 +341,6 @@ async def process_one(
                 print(f"Using previous response due to error.")
 
         elif args.agent_framework == "openai_agents":
-            if agent is None:
-                 print(f"[Fail] {round_str}. OpenAI Agent not initialized.")
-                 break
             try:
                 # For the first turn, runner_input is just the board prompt
                 if round_idx == 0:
@@ -383,7 +379,7 @@ async def process_one(
             try:
                 # Invoke the LangGraph agent asynchronously
                 # The history is passed in the input dictionary under the 'messages' key
-                result = await agent.ainvoke({"messages": input_conversation})
+                result = await agent.invoke({"messages": input_conversation})
 
                 # Extract the assistant's response message object (should be a dict)
                 assistant_message_dict = result["messages"][-1]
@@ -495,10 +491,12 @@ async def process_one(
     elif args.agent_framework == "openai_agents":
         total_input_tokens = total_usage.input_tokens
         total_output_tokens = total_usage.output_tokens
+    elif args.agent_framework == "langgraph":
+        total_input_tokens = total_input_tokens_lg
+        total_output_tokens = total_output_tokens_lg
     elif args.agent_framework == "pydanticai":
         total_input_tokens = total_usage["input_tokens"]
         total_output_tokens = total_usage["output_tokens"]
-
 
     return {
         # From input
