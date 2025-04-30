@@ -67,6 +67,7 @@ python -m eval.run_agent \
     --model ${MODEL_ID} \
     --num_empty_cells 5 \
     --n_history_turns -1 \
+    --n_response_idxs 0 1 2 3 4 \
     --puzzle_size 4 \
     --batch_size 15
 ```
