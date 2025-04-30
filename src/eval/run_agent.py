@@ -379,7 +379,7 @@ async def process_one(
             try:
                 # Invoke the LangGraph agent asynchronously
                 # The history is passed in the input dictionary under the 'messages' key
-                result = await agent.invoke({"messages": input_conversation})
+                result = await agent.ainvoke({"messages": input_conversation})
 
                 # Extract the assistant's response message object (should be a dict)
                 assistant_message_dict = result["messages"][-1]
