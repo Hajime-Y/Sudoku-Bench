@@ -399,11 +399,11 @@ async def process_one(
 
         elif args.agent_framework == "pydanticai":
             # Convert history to PydanticAI format
-            pydantic_history = convert_to_pydanticai_messages(input_conversation, model)
+            pydantic_history = convert_to_pydanticai_messages(input_conversation[:-1], model)
 
             # Run PydanticAI agent
-            result = await agent.run(message_history=pydantic_history)
-            assistant_response = result.output
+            result = await agent.run(user_prompt=input_conversation[-1]["content"], message_history=pydantic_history)
+            assistant_response = result.data
 
             # Get and accumulate token usage
             usage = result.usage()
