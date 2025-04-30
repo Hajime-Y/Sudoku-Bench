@@ -88,6 +88,22 @@ except ImportError:
     OpenAIUsage = None
     OpenAIModelSettings = None
 
+# Add langgraph imports
+try:
+    from langgraph.prebuilt import create_react_agent
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    print("langgraph or langchain-openai not installed. Please run `uv add langgraph langchain-openai`")
+    create_react_agent = None
+    ChatOpenAI = None
+
+# Add pydantic-ai imports
+try:
+    from pydantic_ai import Agent as PydanticAgent
+except ImportError:
+    print("pydantic-ai not installed. Please run `uv add pydantic-ai`")
+    PydanticAgent = None
+
 from eval.prompts import (
     BOARD_PROMPT,
     PREFILLED_ASSISTANT_RESPONSE,
@@ -98,6 +114,7 @@ from eval.utils import (
     pretty_print_visual_elements,
     random_fill_hints,
     smolagents_output_to_string,
+    convert_to_pydanticai_messages,
 )
 from sudoku_ds import (
     SudokuAction,
@@ -199,6 +216,57 @@ async def process_one(
         if OpenAIUsage is None:
             raise ImportError("openai-agents is not installed. Please run `uv add openai-agents`")
         total_usage = OpenAIUsage()
+    elif args.agent_framework == "langgraph":
+        if ChatOpenAI is None or create_react_agent is None:
+             raise ImportError("langgraph or langchain-openai not installed. Please run `uv add langgraph langchain-openai`")
+
+        # Process model name for langgraph with ChatOpenAI
+        processed_model_name = model
+        if "/" in model:
+            prefix, suffix = model.split("/", 1)
+            if prefix == "openai":
+                processed_model_name = suffix
+            else:
+                raise ValueError(f"Unsupported model prefix for langgraph: {prefix}. Only 'openai/' is supported.")
+        # If no "/" found, use the original model name
+
+        if prefix == "openai":
+            llm = ChatOpenAI(
+                model=processed_model_name,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                max_tokens=args.max_tokens,
+            )
+
+        # LangGraph's ReAct agent doesn't explicitly take instructions like OpenAI Agents.
+        agent = create_react_agent(llm, tools=[])
+
+    elif args.agent_framework == "pydanticai":
+        if PydanticAgent is None:
+            raise ImportError("pydantic-ai is not installed. Please run `uv add pydantic-ai`")
+
+        # Process model name for pydantic-ai
+        # PydanticAI expects format like "openai:gpt-4"
+        processed_model_id = model
+        if "/" in model:
+            prefix, suffix = model.split("/", 1)
+            if prefix == "openai": # Currently only support openai prefix conversion
+                processed_model_id = f"{prefix}:{suffix}"
+            # Add other provider conversions if needed
+            # else: raise ValueError(f"Unsupported model prefix for pydantic-ai: {prefix}")
+        # If no known prefix, use the original model name (might need adjustments based on pydantic-ai support)
+
+        agent = PydanticAgent(
+            model_id=processed_model_id,
+            model_settings={
+                'temperature': args.temperature,
+                'max_tokens': args.max_tokens,
+                'top_p': args.top_p,
+            },
+        )
+
+        # Initialize usage counter for pydantic-ai
+        total_usage = {"input_tokens": 0, "output_tokens": 0}
 
     num_correct_placements = 0
     assistant_response = None # Initialize assistant_response
@@ -311,14 +379,41 @@ async def process_one(
                     break
                 print(f"Using previous response due to error.")
 
-        # --- Placeholder for other API/Agent Frameworks ---
-        # elif args.api == "openai":
-        #     # Original call_api logic or a refactored version for OpenAI
-        #     pass # Replace with actual call
-        # elif args.api == "anthropic":
-        #     # Original call_api logic or a refactored version for Anthropic
-        #     pass # Replace with actual call
-        # ... etc.
+        elif args.agent_framework == "langgraph":
+            try:
+                # Invoke the LangGraph agent asynchronously
+                # The history is passed in the input dictionary under the 'messages' key
+                result = await agent.ainvoke({"messages": input_conversation})
+
+                # Extract the assistant's response message object (should be a dict)
+                assistant_message_dict = result["messages"][-1]
+                assistant_response = assistant_message_dict.content
+
+                # Accumulate token usage if available in response_metadata
+                usage = assistant_message_dict.response_metadata["token_usage"]
+                total_input_tokens_lg += usage.get('prompt_tokens', 0)
+                total_output_tokens_lg += usage.get('completion_tokens', 0)
+
+            except Exception as e:
+                print(f"[Fail] {round_str}. Error calling LangGraph Agent: {e}")
+                # Use the previous response if available, otherwise break
+                if assistant_response is None:
+                    break
+                print(f"Using previous response due to error.")
+
+        elif args.agent_framework == "pydanticai":
+            # Convert history to PydanticAI format
+            pydantic_history = convert_to_pydanticai_messages(input_conversation, model)
+
+            # Run PydanticAI agent
+            result = await agent.run(message_history=pydantic_history)
+            assistant_response = result.output
+
+            # Get and accumulate token usage
+            usage = result.usage()
+            total_usage["input_tokens"] += usage.request_tokens or 0
+            total_usage["output_tokens"] += usage.response_tokens or 0
+
         else:
              print(f"[Fail] {round_str}. Unsupported Agent Framework: {args.agent_framework}")
              break
@@ -400,6 +495,9 @@ async def process_one(
     elif args.agent_framework == "openai_agents":
         total_input_tokens = total_usage.input_tokens
         total_output_tokens = total_usage.output_tokens
+    elif args.agent_framework == "pydanticai":
+        total_input_tokens = total_usage["input_tokens"]
+        total_output_tokens = total_usage["output_tokens"]
 
 
     return {
@@ -526,7 +624,7 @@ def main():
 
     # Model
     parser.add_argument("--agent_framework", type=str, default="smolagents",
-                        choices=["smolagents", "openai_agents"],
+                        choices=["smolagents", "openai_agents", "langgraph", "pydanticai"],
                         help="Agent Framework or direct API to use for evaluation.")
     parser.add_argument("--model", type=str, required=True,
                         help="Model name or path.")

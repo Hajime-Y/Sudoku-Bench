@@ -11,3 +11,6 @@ seaborn
 smolagents
 litellm
 openai-agents
+langgraph
+langchain-openai
+pydantic-ai

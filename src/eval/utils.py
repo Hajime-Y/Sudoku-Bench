@@ -1,6 +1,7 @@
 import random
 import re
 from typing import Any
+from pydantic_ai.messages import ModelMessagesTypeAdapter
 
 
 def pretty_print_visual_elements(visual_elements: list) -> str:
@@ -119,3 +120,31 @@ def smolagents_output_to_string(output: Any) -> str:
 
     # Otherwise, fall back to the built-in str()
     return str(output)
+
+
+def convert_to_pydanticai_messages(input_conversation: list[dict], model_id: str) -> list:
+    """
+    Convert standard conversation format to PydanticAI's ModelMessage format.
+    """
+    messages_json = []
+    for msg in input_conversation:
+        if msg["role"] == "user":
+            messages_json.append(
+                {
+                    "kind": "request",
+                    "parts": [{"content": msg["content"], "part_kind": "user-prompt"}],
+                    "instructions": None,
+                }
+            )
+        elif msg["role"] == "assistant":
+            model_name_part = model_id.split("/")
+            model_name = model_name_part[1] if len(model_name_part) > 1 else model_id
+            messages_json.append(
+                {
+                    "kind": "response",
+                    "model_name": model_name,
+                    "parts": [{"content": msg["content"], "part_kind": "text"}],
+                }
+            )
+    # Validate and convert to PydanticAI's internal message objects
+    return ModelMessagesTypeAdapter.validate_python(messages_json)
