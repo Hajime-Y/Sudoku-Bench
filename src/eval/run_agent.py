@@ -307,9 +307,18 @@ async def process_one(
         else:
             raise ValueError(f"Unsupported model provider for agno: {prefix}. Only 'openai/' is supported.")
 
+        agno_tools = []
+        if args.use_reasoning_tools:
+            try:
+                from agno.tools.reasoning import ReasoningTools
+                agno_tools.append(ReasoningTools(add_instructions=True))
+            except ImportError:
+                 print("Warning: ReasoningTools not found in agno. Install agno with reasoning support if needed.")
+                 # Optionally raise an error or proceed without the tool
+
         agent = AgnoAgent(
             model=llm,
-            tools=[], # No tools needed for Sudoku
+            tools=agno_tools, # Use the dynamically created list of tools
         )
         
         # Initialize usage counter for agno
@@ -575,11 +584,16 @@ async def process_one(
         total_input_tokens = total_usage["input_tokens"]
         total_output_tokens = total_usage["output_tokens"]
 
+    # Determine the model name to save in results
+    model_name_to_save = args.model_save_name if args.model_save_name else f"{args.agent_framework}-{model}"
+    if args.agent_framework == "agno" and args.use_reasoning_tools:
+        model_name_to_save = args.model_save_name if args.model_save_name else f"{args.agent_framework}-reasoning-{model}"
+
     return {
         # From input
         "data_source": args.dataset,
         "puzzle_id": request["puzzle_id"],
-        "model": args.model_save_name if args.model_save_name else f"{args.agent_framework}-{model}",
+        "model": model_name_to_save,
         "num_empty_cells": request["num_empty_cells"],
         "shuffle_seed": request["shuffle_seed"],
         "n_response_idx": request["n_response_idx"],
@@ -720,6 +734,10 @@ def main():
     parser.add_argument("--retry_delay", type=float, default=5.0,
                         help="Delay (in second) between retries.")
 
+    # Agno specific
+    parser.add_argument("--use_reasoning_tools", action="store_true",
+                        help="Use ReasoningTools with agno framework (only applicable if agent_framework is 'agno').")
+
     # vLLM specific
     parser.add_argument("--tensor_parallel_size", type=int, default=1,
                         help="Tensor parallel size for vLLM.")
@@ -737,6 +755,10 @@ def main():
                 f"--n_history_turns must be [-1] when using agent_framework='{args.agent_framework}'. "
                 f"{args.agent_framework} manages its own history."
             )
+
+    # Warning if --use_reasoning_tools is used with other frameworks
+    if args.agent_framework != "agno" and args.use_reasoning_tools:
+        print("Warning: --use_reasoning_tools is only applicable when agent_framework is 'agno'. Ignoring.")
 
     # Sanity check
     assert args.num_empty_cells != [0] or len(args.shuffle_seeds) == 1, \
