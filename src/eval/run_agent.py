@@ -114,6 +114,17 @@ except ImportError:
     AgnoRunResponse = None
     AgnoOpenAIChat = None
 
+# Add autogen imports
+try:
+    from autogen_agentchat.agents import AssistantAgent
+    from autogen_agentchat.messages import TextMessage
+    from autogen_ext.models.openai import OpenAIChatCompletionClient
+except ImportError:
+    print("autogen not installed. Please run `uv add autogen-agentchat autogen-ext[openai]`")
+    AssistantAgent = None
+    TextMessage = None
+    OpenAIChatCompletionClient = None
+
 from eval.prompts import (
     BOARD_PROMPT,
     PREFILLED_ASSISTANT_RESPONSE,
@@ -324,6 +335,53 @@ async def process_one(
         # Initialize usage counter for agno
         total_usage = {"input_tokens": 0, "output_tokens": 0}
 
+    elif args.agent_framework == "autogen":
+        if AssistantAgent is None or TextMessage is None or OpenAIChatCompletionClient is None:
+            raise ImportError("autogen not installed. Please run `uv add autogen-agentchat autogen-ext[openai]`")
+
+        # Process model name for AutoGen (expects 'openai/gpt-...' or similar)
+        processed_model_name_for_client = model
+        if "/" in model:
+            prefix, suffix = model.split("/", 1)
+            if prefix != "openai": # Currently only support openai prefix
+                 raise ValueError(f"Unsupported model prefix for autogen: {prefix}. Only 'openai/' is supported.")
+            # Use the suffix for OpenAIChatCompletionClient
+            processed_model_name_for_client = suffix
+        # else:
+             # If no prefix, assume it's an OpenAI model name
+             # processed_model_name_for_client = model # Already initialized
+
+        model_client = OpenAIChatCompletionClient(
+            model=processed_model_name_for_client,
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+            top_p=args.top_p,
+        )
+
+        # ReAct prompt (reference: https://microsoft.github.io/autogen/0.2/docs/topics/prompting-and-reasoning/react/)
+        ReAct_prompt = """Answer the following questions as best you can. You have access to tools provided.
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take
+Action Input: the input to the action
+Observation: the result of the action
+... (this process can repeat multiple times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+"""
+
+        agent = AssistantAgent(
+            name="SudokuSolverAgent",
+            model_client=model_client,
+            system_message=ReAct_prompt,
+        )
+
+        # Initialize usage counter for autogen
+        total_usage = {"input_tokens": 0, "output_tokens": 0}
+
     num_correct_placements = 0
     assistant_response = None # Initialize assistant_response
     for round_idx in range(max_rounds):
@@ -479,7 +537,6 @@ async def process_one(
 
                 # Extract the assistant's response
                 assistant_response = result.content
-                print(assistant_response)
 
                 # Get token usage for this round and accumulate
                 usage = result.metrics
@@ -493,6 +550,33 @@ async def process_one(
                     break
                 print(f"Using previous response due to error.")
 
+        elif args.agent_framework == "autogen":
+            try:
+                # Convert current history to AutoGen TextMessage list
+                seed_msgs = []
+                for m in input_conversation:
+                    seed_msgs.append(TextMessage(source=m["user"], content=m["content"]))
+
+                # Run AutoGen agent asynchronously
+                # AutoGen's run might need adjustment based on how it handles multi-turn history internally
+                # The current implementation passes the full history each time.
+                result = await agent.run(task=seed_msgs)
+
+                # Extract the assistant's response
+                assistant_response = result.messages[-1].content
+
+                # Get token usage
+                usage = result.messages[-1].models_usage
+                total_usage["input_tokens"] += usage.prompt_tokens
+                total_usage["output_tokens"] += usage.completion_tokens
+
+            except Exception as e:
+                 print(f"[Fail] {round_str}. Error calling AutoGen Agent: {e}")
+                 # Use the previous response if available, otherwise break
+                 if assistant_response is None:
+                     break # Break if error and no previous response
+                 print(f"Using previous response due to error.")
+
         else:
              print(f"[Fail] {round_str}. Unsupported Agent Framework: {args.agent_framework}")
              break
@@ -501,6 +585,7 @@ async def process_one(
         if not assistant_response:
             print(f"{round_str}. No response from server.")
             break
+        print(assistant_response)
 
         # Update conversation
         history_conversation.append({"role": "assistant", "content": assistant_response})
@@ -564,23 +649,17 @@ async def process_one(
     final_board_ascii = current_board.to_ascii(unfilled=".")
     final_solved = 1 if (final_board_ascii == solution_ascii) else 0
 
-    # Get token counts if using smolagents
+    # Get token counts
     total_input_tokens = 0
     total_output_tokens = 0
     if args.agent_framework == "smolagents" and agent is not None:
         token_counts = agent.monitor.get_total_token_counts()
         total_input_tokens = token_counts.get("input", 0)
         total_output_tokens = token_counts.get("output", 0)
-    elif args.agent_framework == "openai_agents":
+    elif args.agent_framework == "openai_agents" and total_usage is not None:
         total_input_tokens = total_usage.input_tokens
         total_output_tokens = total_usage.output_tokens
-    elif args.agent_framework == "langgraph":
-        total_input_tokens = total_usage["input_tokens"]
-        total_output_tokens = total_usage["output_tokens"]
-    elif args.agent_framework == "pydanticai":
-        total_input_tokens = total_usage["input_tokens"]
-        total_output_tokens = total_usage["output_tokens"]
-    elif args.agent_framework == "agno":
+    elif args.agent_framework in ["langgraph", "pydanticai", "agno", "autogen"] and total_usage is not None:
         total_input_tokens = total_usage["input_tokens"]
         total_output_tokens = total_usage["output_tokens"]
 
@@ -688,7 +767,7 @@ def main():
                         help="Dataset to evaluate on.")
     parser.add_argument("--output_csv", type=str, required=True,
                         help="Output CSV path.")
-    
+
     # Subset of puzzles to evaluate
     parser.add_argument("--iloc_start", type=int, default=0,
                         help="Start index of puzzles to evaluate.")
@@ -709,14 +788,14 @@ def main():
     parser.add_argument("--n_response_idxs", type=int, nargs="+", default=[0],
                         help="If you want to run multiple trials per puzzle/hint/seed. E.g., [0,1,2,3,4] for 5 runs.")
     parser.add_argument("--n_history_turns", type=int, nargs="+", default=[5],
-                        help="Number of history turns to include in each LLM prompt. -1 means full history. (Currently unused by smolagents)")
+                        help="Number of history turns to include in each LLM prompt. -1 means full history.")
 
     # Model
     parser.add_argument("--agent_framework", type=str, default="smolagents",
-                        choices=["smolagents", "openai_agents", "langgraph", "pydanticai", "agno"],
+                        choices=["smolagents", "openai_agents", "langgraph", "pydanticai", "agno", "autogen"],
                         help="Agent Framework or direct API to use for evaluation.")
     parser.add_argument("--model", type=str, required=True,
-                        help="Model name or path.")
+                        help="Model name or path (e.g., 'openai/gpt-4o-mini' for OpenAI models with agent frameworks).")
     parser.add_argument("--model_save_name", type=str,
                         help="Model name in saved result. If not provided, use --model.")
     parser.add_argument("--max_tokens", type=int, default=32768,
@@ -766,7 +845,7 @@ def main():
 
     # Load puzzle
     dataset = datasets.load_dataset("SakanaAI/Sudoku-Bench", args.dataset, split="test")
-    
+
     # Filter by puzzle size if specified
     if args.puzzle_size is not None:
         print(f"Filtering dataset for puzzle size: {args.puzzle_size}x{args.puzzle_size}")
