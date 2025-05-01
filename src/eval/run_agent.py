@@ -555,7 +555,7 @@ Final Answer: the final answer to the original input question
                 # Convert current history to AutoGen TextMessage list
                 seed_msgs = []
                 for m in input_conversation:
-                    seed_msgs.append(TextMessage(source=m["user"], content=m["content"]))
+                    seed_msgs.append(TextMessage(source=m["role"], content=m["content"]))
 
                 # Run AutoGen agent asynchronously
                 # AutoGen's run might need adjustment based on how it handles multi-turn history internally
