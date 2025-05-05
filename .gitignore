@@ -176,3 +176,9 @@ cython_debug/
 # macOS system files
 .DS_Store
 **/.DS_Store
+
+# Pipenv files
+src/Pipfile
+src/Pipfile.lock
+src/eval/Pipfile
+src/eval/Pipfile.lock
