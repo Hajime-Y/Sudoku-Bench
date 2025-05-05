@@ -373,11 +373,17 @@ Thought: I now know the final answer
 Final Answer: the final answer to the original input question
 """
 
-        agent = AssistantAgent(
-            name="SudokuSolverAgent",
-            model_client=model_client,
-            system_message=ReAct_prompt,
-        )
+        if args.use_reasoning_tools:
+            agent = AssistantAgent(
+                name="SudokuSolverAgent",
+                model_client=model_client,
+                system_message=ReAct_prompt,
+            )
+        else:
+            agent = AssistantAgent(
+                name="SudokuSolverAgent",
+                model_client=model_client,
+            )
 
         # Initialize usage counter for autogen
         total_usage = {"input_tokens": 0, "output_tokens": 0}
@@ -666,6 +672,8 @@ Final Answer: the final answer to the original input question
     # Determine the model name to save in results
     model_name_to_save = args.model_save_name if args.model_save_name else f"{args.agent_framework}-{model}"
     if args.agent_framework == "agno" and args.use_reasoning_tools:
+        model_name_to_save = args.model_save_name if args.model_save_name else f"{args.agent_framework}-reasoning-{model}"
+    elif args.agent_framework == "autogen" and args.use_reasoning_tools:
         model_name_to_save = args.model_save_name if args.model_save_name else f"{args.agent_framework}-reasoning-{model}"
 
     return {
